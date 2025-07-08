@@ -21,7 +21,7 @@ os.makedirs("embeddings", exist_ok=True)
 
 
 
-HF_TOKEN = "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"
+HF_TOKEN = os.environ["HF_TOKEN"]
 
 model = Model.from_pretrained("pyannote/embedding", use_auth_token=HF_TOKEN)
 inference = Inference(model, window="whole")
