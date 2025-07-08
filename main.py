@@ -5,6 +5,7 @@ from torch.nn.functional import cosine_similarity
 import torch
 import os
 import shutil
+from pyannote.audio import Model
 
 app = FastAPI()
 
@@ -18,7 +19,13 @@ app.add_middleware(
 # Crear carpeta si no existe
 os.makedirs("embeddings", exist_ok=True)
 
-inference = Inference("pyannote/embedding", window="whole")
+
+
+HF_TOKEN = "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"
+
+model = Model.from_pretrained("pyannote/embedding", use_auth_token=HF_TOKEN)
+inference = Inference(model, window="whole")
+
 
 @app.post("/register")
 async def register_user(nombre: str = Form(...), file: UploadFile = File(...)):
