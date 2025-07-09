@@ -188,27 +188,21 @@ def extract_embedding(path: str) -> np.ndarray:
         # Preprocesar
         y = preprocess_audio(y, sr)
 
-        # === CARACTERÍSTICAS ESPECTRALES ===
+        # === CARACTERÍSTICAS ESPECTRALES BÁSICAS ===
         # MFCC (Mel-frequency cepstral coefficients)
         mfcc = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=13, hop_length=512)
         mfcc_delta = librosa.feature.delta(mfcc)
         mfcc_delta2 = librosa.feature.delta(mfcc, order=2)
         
         # Mel Spectrogram
-        mel = librosa.feature.melspectrogram(y=y, sr=sr, n_mels=128, hop_length=512)
+        mel = librosa.feature.melspectrogram(y=y, sr=sr, n_mels=40, hop_length=512)
         mel_db = librosa.power_to_db(mel, ref=np.max)
         
-        # === CARACTERÍSTICAS TONALES ===
+        # === CARACTERÍSTICAS TONALES BÁSICAS ===
         # Chroma (características tonales)
         chroma_stft = librosa.feature.chroma_stft(y=y, sr=sr, hop_length=512)
-        chroma_cqt = librosa.feature.chroma_cqt(y=y, sr=sr, hop_length=512)
-        chroma_cens = librosa.feature.chroma_cens(y=y, sr=sr, hop_length=512)
         
-        # Tonnetz (análisis armónico)
-        y_harmonic = librosa.effects.harmonic(y)
-        tonnetz = librosa.feature.tonnetz(y=y_harmonic, sr=sr)
-        
-        # === CARACTERÍSTICAS TEMPORALES ===
+        # === CARACTERÍSTICAS TEMPORALES BÁSICAS ===
         # Zero Crossing Rate
         zcr = librosa.feature.zero_crossing_rate(y, hop_length=512)
         
@@ -226,33 +220,6 @@ def extract_embedding(path: str) -> np.ndarray:
         
         # Spectral Contrast
         contrast = librosa.feature.spectral_contrast(y=y, sr=sr, hop_length=512)
-        
-        # Spectral Flatness
-        flatness = librosa.feature.spectral_flatness(y=y, hop_length=512)
-        
-        # === CARACTERÍSTICAS DE PITCH ===
-        # Pitch tracking con YIN
-        try:
-            pitch_yin = librosa.yin(y, fmin=librosa.note_to_hz('C2'), 
-                                   fmax=librosa.note_to_hz('C7'), hop_length=512)
-            pitch_yin = np.nan_to_num(pitch_yin, nan=0.0)
-        except:
-            pitch_yin = np.zeros(librosa.time_to_frames(len(y)/sr, sr=sr, hop_length=512))
-        
-        # === CARACTERÍSTICAS ARMÓNICAS/PERCUSIVAS ===
-        # Separación armónica/percusiva
-        y_harmonic, y_percussive = librosa.effects.hpss(y)
-        
-        # Características de la parte armónica
-        harmonic_centroid = librosa.feature.spectral_centroid(y=y_harmonic, sr=sr, hop_length=512)
-        harmonic_rolloff = librosa.feature.spectral_rolloff(y=y_harmonic, sr=sr, hop_length=512)
-        
-        # === CARACTERÍSTICAS DE TEMPO ===
-        # Tempo y beats
-        tempo, beats = librosa.beat.beat_track(y=y, sr=sr, hop_length=512)
-        
-        # Onset strength
-        onset_env = librosa.onset.onset_strength(y=y, sr=sr, hop_length=512)
         
         # === ESTADÍSTICAS AVANZADAS ===
         def extract_stats(feature):
@@ -278,7 +245,7 @@ def extract_embedding(path: str) -> np.ndarray:
                 ])
             return np.array(stats)
         
-        # === CONCATENAR TODAS LAS CARACTERÍSTICAS ===
+        # === CONCATENAR CARACTERÍSTICAS BÁSICAS ===
         all_features = []
         
         # MFCC y sus deltas
@@ -292,14 +259,7 @@ def extract_embedding(path: str) -> np.ndarray:
         all_features.append(extract_stats(mel_db))
         
         # Chroma features
-        all_features.extend([
-            extract_stats(chroma_stft),
-            extract_stats(chroma_cqt),
-            extract_stats(chroma_cens)
-        ])
-        
-        # Tonnetz
-        all_features.append(extract_stats(tonnetz))
+        all_features.append(extract_stats(chroma_stft))
         
         # Características temporales
         all_features.extend([
@@ -308,23 +268,7 @@ def extract_embedding(path: str) -> np.ndarray:
             extract_stats(rolloff),
             extract_stats(centroid),
             extract_stats(bandwidth),
-            extract_stats(contrast),
-            extract_stats(flatness)
-        ])
-        
-        # Pitch
-        all_features.append(extract_stats(pitch_yin))
-        
-        # Características armónicas
-        all_features.extend([
-            extract_stats(harmonic_centroid),
-            extract_stats(harmonic_rolloff)
-        ])
-        
-        # Características de tempo
-        all_features.extend([
-            np.array([tempo]),  # Tempo como escalar
-            extract_stats(onset_env)
+            extract_stats(contrast)
         ])
         
         # Concatenar todo
