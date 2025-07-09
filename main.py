@@ -189,7 +189,7 @@ def extract_embedding(path: str) -> np.ndarray:
         mfcc = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=13)
         
         # Chroma (características tonales)
-        chroma = librosa.feature.chroma(y=y, sr=sr)
+        chroma = librosa.feature.chroma_stft(y=y, sr=sr)
         
         # Contraste espectral
         spectral_contrast = librosa.feature.spectral_contrast(y=y, sr=sr)
