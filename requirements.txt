@@ -1,5 +1,10 @@
-fastapi
+fastapi=
 uvicorn
-pyannote-audio
-torch
+pydanti
+numpy
+librosa
+sqlalchemy
+aiosqlite
+pyngrok
+prometheus-client
 python-multipart
