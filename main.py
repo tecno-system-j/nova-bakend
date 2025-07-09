@@ -32,8 +32,10 @@ from typing import List, Optional, Dict, Any
 from contextlib import asynccontextmanager
 import hashlib
 import uuid
-import opensmile
-import soundfile as sf
+
+import sklearn
+from sklearn.metrics.pairwise import cosine_similarity
+from sklearn.preprocessing import StandardScaler
 
 # Configuración de logging
 logging.basicConfig(
@@ -178,7 +180,7 @@ def preprocess_audio(y: np.ndarray, sr: int) -> np.ndarray:
         raise
 
 def extract_embedding(path: str) -> np.ndarray:
-    """Extraer características de voz mejoradas y extendidas, incluyendo opensmile"""
+    """Extraer características de voz avanzadas usando todas las capacidades de librosa"""
     try:
         # Cargar audio
         y, sr = librosa.load(path, sr=SAMPLE_RATE)
@@ -186,83 +188,182 @@ def extract_embedding(path: str) -> np.ndarray:
         # Preprocesar
         y = preprocess_audio(y, sr)
 
-        # MFCC
-        mfcc = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=13)
-        # Chroma
-        chroma = librosa.feature.chroma_stft(y=y, sr=sr)
+        # === CARACTERÍSTICAS ESPECTRALES ===
+        # MFCC (Mel-frequency cepstral coefficients)
+        mfcc = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=13, hop_length=512)
+        mfcc_delta = librosa.feature.delta(mfcc)
+        mfcc_delta2 = librosa.feature.delta(mfcc, order=2)
+        
         # Mel Spectrogram
-        mel = librosa.feature.melspectrogram(y=y, sr=sr, n_mels=40)
-        # Tonnetz (requiere que el audio sea armónico)
-        tonnetz = librosa.feature.tonnetz(y=librosa.effects.harmonic(y), sr=sr)
-        # Spectral Contrast
-        spectral_contrast = librosa.feature.spectral_contrast(y=y, sr=sr)
-        # Spectral Centroid
-        spectral_centroid = librosa.feature.spectral_centroid(y=y, sr=sr)
-        # Spectral Rolloff
-        spectral_rolloff = librosa.feature.spectral_rolloff(y=y, sr=sr)
-        # Spectral Bandwidth
-        spectral_bandwidth = librosa.feature.spectral_bandwidth(y=y, sr=sr)
+        mel = librosa.feature.melspectrogram(y=y, sr=sr, n_mels=128, hop_length=512)
+        mel_db = librosa.power_to_db(mel, ref=np.max)
+        
+        # === CARACTERÍSTICAS TONALES ===
+        # Chroma (características tonales)
+        chroma_stft = librosa.feature.chroma_stft(y=y, sr=sr, hop_length=512)
+        chroma_cqt = librosa.feature.chroma_cqt(y=y, sr=sr, hop_length=512)
+        chroma_cens = librosa.feature.chroma_cens(y=y, sr=sr, hop_length=512)
+        
+        # Tonnetz (análisis armónico)
+        y_harmonic = librosa.effects.harmonic(y)
+        tonnetz = librosa.feature.tonnetz(y=y_harmonic, sr=sr)
+        
+        # === CARACTERÍSTICAS TEMPORALES ===
         # Zero Crossing Rate
-        zero_crossing_rate = librosa.feature.zero_crossing_rate(y)
+        zcr = librosa.feature.zero_crossing_rate(y, hop_length=512)
+        
         # Root Mean Square Energy
-        rms = librosa.feature.rms(y=y)
-        # Pitch (YIN)
+        rms = librosa.feature.rms(y=y, hop_length=512)
+        
+        # Spectral Rolloff
+        rolloff = librosa.feature.spectral_rolloff(y=y, sr=sr, hop_length=512)
+        
+        # Spectral Centroid
+        centroid = librosa.feature.spectral_centroid(y=y, sr=sr, hop_length=512)
+        
+        # Spectral Bandwidth
+        bandwidth = librosa.feature.spectral_bandwidth(y=y, sr=sr, hop_length=512)
+        
+        # Spectral Contrast
+        contrast = librosa.feature.spectral_contrast(y=y, sr=sr, hop_length=512)
+        
+        # Spectral Flatness
+        flatness = librosa.feature.spectral_flatness(y=y, hop_length=512)
+        
+        # === CARACTERÍSTICAS DE PITCH ===
+        # Pitch tracking con YIN
         try:
-            pitch = librosa.yin(y, fmin=librosa.note_to_hz('C2'), fmax=librosa.note_to_hz('C7'))
-            pitch_stats = [np.mean(pitch), np.std(pitch), np.min(pitch), np.max(pitch)]
-        except Exception:
-            pitch_stats = [0, 0, 0, 0]
-
-        # Para cada feature, concatenar media, std, min, max
-        def stats(feat):
-            return np.concatenate([
-                np.mean(feat, axis=1),
-                np.std(feat, axis=1),
-                np.min(feat, axis=1),
-                np.max(feat, axis=1)
-            ])
-
-        librosa_features = np.concatenate([
-            stats(mfcc),
-            stats(chroma),
-            stats(mel),
-            stats(tonnetz),
-            stats(spectral_contrast),
-            stats(spectral_centroid),
-            stats(spectral_rolloff),
-            stats(spectral_bandwidth),
-            stats(zero_crossing_rate),
-            stats(rms),
-            np.array(pitch_stats)
+            pitch_yin = librosa.yin(y, fmin=librosa.note_to_hz('C2'), 
+                                   fmax=librosa.note_to_hz('C7'), hop_length=512)
+            pitch_yin = np.nan_to_num(pitch_yin, nan=0.0)
+        except:
+            pitch_yin = np.zeros(librosa.time_to_frames(len(y)/sr, sr=sr, hop_length=512))
+        
+        # === CARACTERÍSTICAS ARMÓNICAS/PERCUSIVAS ===
+        # Separación armónica/percusiva
+        y_harmonic, y_percussive = librosa.effects.hpss(y)
+        
+        # Características de la parte armónica
+        harmonic_centroid = librosa.feature.spectral_centroid(y=y_harmonic, sr=sr, hop_length=512)
+        harmonic_rolloff = librosa.feature.spectral_rolloff(y=y_harmonic, sr=sr, hop_length=512)
+        
+        # === CARACTERÍSTICAS DE TEMPO ===
+        # Tempo y beats
+        tempo, beats = librosa.beat.beat_track(y=y, sr=sr, hop_length=512)
+        
+        # Onset strength
+        onset_env = librosa.onset.onset_strength(y=y, sr=sr, hop_length=512)
+        
+        # === ESTADÍSTICAS AVANZADAS ===
+        def extract_stats(feature):
+            """Extraer estadísticas completas de una característica"""
+            if len(feature.shape) == 1:
+                feature = feature.reshape(1, -1)
+            
+            stats = []
+            for i in range(feature.shape[0]):
+                row = feature[i]
+                # Estadísticas básicas
+                stats.extend([
+                    np.mean(row), np.std(row), np.min(row), np.max(row),
+                    np.median(row), np.percentile(row, 25), np.percentile(row, 75)
+                ])
+                # Estadísticas adicionales
+                stats.extend([
+                    np.var(row),  # Varianza
+                    np.sqrt(np.mean(row**2)),  # RMS
+                    np.sum(np.abs(row)),  # Suma de valores absolutos
+                    np.sum(row**2),  # Energía
+                    np.max(row) - np.min(row)  # Rango
+                ])
+            return np.array(stats)
+        
+        # === CONCATENAR TODAS LAS CARACTERÍSTICAS ===
+        all_features = []
+        
+        # MFCC y sus deltas
+        all_features.extend([
+            extract_stats(mfcc),
+            extract_stats(mfcc_delta),
+            extract_stats(mfcc_delta2)
         ])
-
-        # --- OPENSMILE ---
-        smile = opensmile.Smile(
-            feature_set=opensmile.FeatureSet.ComParE_2016,
-            feature_level=opensmile.FeatureLevel.Functionals,
-        )
-        # Guardar temporalmente el audio preprocesado para opensmile
-        temp_wav = path + "_smile.wav"
-        sf.write(temp_wav, y, sr)
-        try:
-            smile_features = smile.process_file(temp_wav)
-            smile_vector = smile_features.values.flatten()
-        finally:
-            if os.path.exists(temp_wav):
-                os.remove(temp_wav)
-
-        # Concatenar ambos embeddings
-        features = np.concatenate([
-            librosa_features,
-            smile_vector
+        
+        # Mel spectrogram
+        all_features.append(extract_stats(mel_db))
+        
+        # Chroma features
+        all_features.extend([
+            extract_stats(chroma_stft),
+            extract_stats(chroma_cqt),
+            extract_stats(chroma_cens)
         ])
-
+        
+        # Tonnetz
+        all_features.append(extract_stats(tonnetz))
+        
+        # Características temporales
+        all_features.extend([
+            extract_stats(zcr),
+            extract_stats(rms),
+            extract_stats(rolloff),
+            extract_stats(centroid),
+            extract_stats(bandwidth),
+            extract_stats(contrast),
+            extract_stats(flatness)
+        ])
+        
+        # Pitch
+        all_features.append(extract_stats(pitch_yin))
+        
+        # Características armónicas
+        all_features.extend([
+            extract_stats(harmonic_centroid),
+            extract_stats(harmonic_rolloff)
+        ])
+        
+        # Características de tempo
+        all_features.extend([
+            np.array([tempo]),  # Tempo como escalar
+            extract_stats(onset_env)
+        ])
+        
+        # Concatenar todo
+        features = np.concatenate(all_features)
+        
         # Normalizar features
         features = features / (np.linalg.norm(features) + 1e-8)
+        
         return features
+        
     except Exception as e:
         logger.error(f"Error extrayendo embedding: {str(e)}")
         raise
+
+def calculate_similarity_advanced(embedding1: np.ndarray, embedding2: np.ndarray) -> float:
+    """Calcular similitud usando múltiples métricas"""
+    try:
+        # Similitud coseno
+        cosine_sim = np.dot(embedding1, embedding2) / (
+            np.linalg.norm(embedding1) * np.linalg.norm(embedding2) + 1e-8
+        )
+        
+        # Distancia euclidiana normalizada
+        euclidean_dist = np.linalg.norm(embedding1 - embedding2)
+        euclidean_sim = 1 / (1 + euclidean_dist)
+        
+        # Correlación de Pearson
+        correlation = np.corrcoef(embedding1, embedding2)[0, 1]
+        if np.isnan(correlation):
+            correlation = 0
+        
+        # Combinar métricas (promedio ponderado)
+        combined_score = 0.5 * cosine_sim + 0.3 * euclidean_sim + 0.2 * max(0, correlation)
+        
+        return float(combined_score)
+        
+    except Exception as e:
+        logger.error(f"Error calculando similitud: {str(e)}")
+        return 0.0
 
 def calculate_confidence_level(score: float) -> str:
     """Calcular nivel de confianza"""
@@ -334,10 +435,8 @@ def process_identification(file_content: bytes) -> Dict[str, Any]:
         candidates = []
         
         for user_name, ref_embedding in embeddings_cache.items():
-            # Similitud coseno
-            score = np.dot(embedding, ref_embedding) / (
-                np.linalg.norm(embedding) * np.linalg.norm(ref_embedding) + 1e-8
-            )
+            # Similitud avanzada usando múltiples métricas
+            score = calculate_similarity_advanced(embedding, ref_embedding)
             
             candidates.append({
                 "name": user_name,
