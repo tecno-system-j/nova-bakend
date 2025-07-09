@@ -32,6 +32,8 @@ from typing import List, Optional, Dict, Any
 from contextlib import asynccontextmanager
 import hashlib
 import uuid
+import opensmile
+import soundfile as sf
 
 # Configuración de logging
 logging.basicConfig(
@@ -176,43 +178,87 @@ def preprocess_audio(y: np.ndarray, sr: int) -> np.ndarray:
         raise
 
 def extract_embedding(path: str) -> np.ndarray:
-    """Extraer características de voz mejoradas"""
+    """Extraer características de voz mejoradas y extendidas, incluyendo opensmile"""
     try:
         # Cargar audio
         y, sr = librosa.load(path, sr=SAMPLE_RATE)
         
         # Preprocesar
         y = preprocess_audio(y, sr)
-        
-        # Extraer múltiples características
-        # MFCC (características espectrales)
+
+        # MFCC
         mfcc = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=13)
-        
-        # Chroma (características tonales)
+        # Chroma
         chroma = librosa.feature.chroma_stft(y=y, sr=sr)
-        
-        # Contraste espectral
+        # Mel Spectrogram
+        mel = librosa.feature.melspectrogram(y=y, sr=sr, n_mels=40)
+        # Tonnetz (requiere que el audio sea armónico)
+        tonnetz = librosa.feature.tonnetz(y=librosa.effects.harmonic(y), sr=sr)
+        # Spectral Contrast
         spectral_contrast = librosa.feature.spectral_contrast(y=y, sr=sr)
-        
-        # Características espectrales adicionales
+        # Spectral Centroid
         spectral_centroid = librosa.feature.spectral_centroid(y=y, sr=sr)
+        # Spectral Rolloff
         spectral_rolloff = librosa.feature.spectral_rolloff(y=y, sr=sr)
+        # Spectral Bandwidth
+        spectral_bandwidth = librosa.feature.spectral_bandwidth(y=y, sr=sr)
+        # Zero Crossing Rate
         zero_crossing_rate = librosa.feature.zero_crossing_rate(y)
-        
-        # Combinar todas las características
-        features = np.concatenate([
-            np.mean(mfcc.T, axis=0),
-            np.std(mfcc.T, axis=0),  # Añadir desviación estándar
-            np.mean(chroma.T, axis=0),
-            np.mean(spectral_contrast.T, axis=0),
-            np.mean(spectral_centroid.T, axis=0),
-            np.mean(spectral_rolloff.T, axis=0),
-            np.mean(zero_crossing_rate.T, axis=0)
+        # Root Mean Square Energy
+        rms = librosa.feature.rms(y=y)
+        # Pitch (YIN)
+        try:
+            pitch = librosa.yin(y, fmin=librosa.note_to_hz('C2'), fmax=librosa.note_to_hz('C7'))
+            pitch_stats = [np.mean(pitch), np.std(pitch), np.min(pitch), np.max(pitch)]
+        except Exception:
+            pitch_stats = [0, 0, 0, 0]
+
+        # Para cada feature, concatenar media, std, min, max
+        def stats(feat):
+            return np.concatenate([
+                np.mean(feat, axis=1),
+                np.std(feat, axis=1),
+                np.min(feat, axis=1),
+                np.max(feat, axis=1)
+            ])
+
+        librosa_features = np.concatenate([
+            stats(mfcc),
+            stats(chroma),
+            stats(mel),
+            stats(tonnetz),
+            stats(spectral_contrast),
+            stats(spectral_centroid),
+            stats(spectral_rolloff),
+            stats(spectral_bandwidth),
+            stats(zero_crossing_rate),
+            stats(rms),
+            np.array(pitch_stats)
         ])
-        
+
+        # --- OPENSMILE ---
+        smile = opensmile.Smile(
+            feature_set=opensmile.FeatureSet.ComParE_2016,
+            feature_level=opensmile.FeatureLevel.Functionals,
+        )
+        # Guardar temporalmente el audio preprocesado para opensmile
+        temp_wav = path + "_smile.wav"
+        sf.write(temp_wav, y, sr)
+        try:
+            smile_features = smile.process_file(temp_wav)
+            smile_vector = smile_features.values.flatten()
+        finally:
+            if os.path.exists(temp_wav):
+                os.remove(temp_wav)
+
+        # Concatenar ambos embeddings
+        features = np.concatenate([
+            librosa_features,
+            smile_vector
+        ])
+
         # Normalizar features
         features = features / (np.linalg.norm(features) + 1e-8)
-        
         return features
     except Exception as e:
         logger.error(f"Error extrayendo embedding: {str(e)}")
@@ -267,7 +313,7 @@ def save_embedding(name: str, embedding: np.ndarray) -> str:
     
     return embedding_hash
 
-async def process_identification(file_content: bytes) -> Dict[str, Any]:
+def process_identification(file_content: bytes) -> Dict[str, Any]:
     """Procesar identificación en hilo separado"""
     start_time = time.time()
     
