@@ -1,63 +1,64 @@
-from fastapi import FastAPI, File, UploadFile, Query
-from fastapi.middleware.cors import CORSMiddleware
-import shutil, os
+from fastapi import FastAPI, UploadFile, File, Query
+from pyngrok import ngrok
 import torch
-from pyannote.audio import Inference
 from torch.nn.functional import cosine_similarity
+from pyannote.audio import Inference
+import shutil
+import os
+import numpy as np
 
 app = FastAPI()
 
-# CORS
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# Cargar modelo de embeddings de voz
+inference = Inference("pyannote/embedding", use_auth_token="TU_TOKEN_HF")
 
-# Cargar modelo
-inference = Inference("pyannote/embedding", use_auth_token="TU_TOKEN_DE_HF")
-
-# Crear carpeta embeddings si no existe
+# Crear carpeta de embeddings si no existe
 os.makedirs("embeddings", exist_ok=True)
 
+# Rutas
+
 @app.post("/register")
-async def register_user(name: str = Query(...), file: UploadFile = File(...)):
-    """
-    Registrar un nuevo usuario de voz
-    """
-    path_temp = "temp_register.wav"
-    with open(path_temp, "wb") as buffer:
+async def register_user(file: UploadFile = File(...), name: str = Query(...)):
+    path = f"temp_register.wav"
+    with open(path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
 
-    emb = inference(path_temp).data  # .data → extrae el Tensor
-    os.remove(path_temp)
+    embedding = inference(path)
+    os.remove(path)
 
-    path_embedding = os.path.join("embeddings", f"{name}.pt")
-    torch.save(emb, path_embedding)
+    # Convertir a tensor si no lo es
+    if not isinstance(embedding, torch.Tensor):
+        embedding = torch.tensor(embedding.data, dtype=torch.float32)
 
-    return {"status": "ok", "usuario": name}
+    torch.save(embedding, f"embeddings/{name}.pt")
+    return {"message": f"Usuario '{name}' registrado correctamente."}
+
 
 @app.post("/identify")
 async def identify_user(file: UploadFile = File(...)):
-    """
-    Identificar quién habla
-    """
-    temp_path = "temp_identify.wav"
-    with open(temp_path, "wb") as buffer:
+    path = "temp_identify.wav"
+    with open(path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
 
-    embedding = inference(temp_path).data  # SlidingWindowFeature → Tensor
-    os.remove(temp_path)
+    embedding = inference(path)
+    os.remove(path)
+
+    if not isinstance(embedding, torch.Tensor):
+        embedding = torch.tensor(embedding.data, dtype=torch.float32)
 
     best_score = -1.0
     best_user = "desconocido"
+
     for fname in os.listdir("embeddings"):
         ref_path = os.path.join("embeddings", fname)
-        if not fname.endswith(".pt"):
-            continue
+
+        if os.path.isdir(ref_path):
+            continue  # saltar carpetas como .ipynb_checkpoints
+
         ref = torch.load(ref_path)
+        if not isinstance(ref, torch.Tensor):
+            ref = torch.tensor(ref.data, dtype=torch.float32)
+
         score = cosine_similarity(embedding, ref, dim=0).item()
         if score > best_score:
             best_score = score
@@ -67,3 +68,12 @@ async def identify_user(file: UploadFile = File(...)):
         "usuario": best_user,
         "score": round(best_score, 4)
     }
+
+# Iniciar ngrok
+public_url = ngrok.connect(8000, "http")
+print(f"🌐 Tu servidor FastAPI está disponible públicamente en: {public_url}")
+
+# Levantar FastAPI con Uvicorn
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("main:app", host="0.0.0.0", port=8000)
